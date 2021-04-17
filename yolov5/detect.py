@@ -5,7 +5,13 @@ from pathlib import Path
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
+import paho.mqtt.client as mqtt
 from numpy import random
+from PIL import Image
+import io
+import json
+import paho.mqtt.publish as publish
+
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
@@ -14,22 +20,18 @@ from utils.general import check_img_size, check_requirements, check_imshow, non_
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
-import paho.mqtt.client as mqtt
-import paho.mqtt.publish as publish
 broker = 'localhost'
 port = 1883
-#topic = "dt/fighter/+/lwt"
 client_id = f'python-mqtt-{random.randint(0, 1000)}'
-#setup from https://www.emqx.io/blog/how-to-use-mqtt-in-python
 
 
 def make_mqtt_connection():
 
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
-            print("MQTT successful connection")
+            print("MQTT Successfull connection")
         else:
-            print("Connection failed :( return code: %d\n", rc)
+            print("Connection failed return code: %d\n", rc)
 
     client = mqtt.Client(client_id)
     client.on_connect = on_connect
@@ -37,22 +39,53 @@ def make_mqtt_connection():
     return client
 
 
-def hello_world(client):
-    topic = "dt/fighter/bob/lwt"
-    msg = "hello, world ;)"
-    again = True
-    while again:
-        time.sleep(5)
-        success = client.publish(topic, msg)
-        if success[0] == 0:
-            print("Message sending FAIL")
-            again = False
-        else:
-            print("Sent that message you already kno")
-            again = False
+def text_to_json(alert):
+    json_text = {
+        "client id": client_id,
+        "alert": alert,
+    }
+    return json_text
 
-    return
 
+def send_status_alert(isAlert):
+    topic = "dt/fighter/" + client_id
+    if isAlert:
+        status = {
+            "status": "FIRE",
+            "latitude": random.randint(-90, 90),
+            "longitude": random.randint(-180, 180),
+        }
+        client.publish(topic, json.dumps(status))
+    else:
+        status = {
+            "status": "NOFIRE",
+            "latitude": random.randint(-90, 90),
+            "longitude": random.randint(-180, 180),
+        }
+        client.publish(topic, json.dumps(status))
+    print("Status Sent")
+
+
+def send_picture_alert(path, isAlert):
+    send_status_alert(isAlert)
+    if isAlert:
+        topic = "dt/fighter/" + client_id + "/fire_image"
+        print("Detection Image")
+    else:
+        topic = "dt/fighter/" + client_id + "/nofire_image"
+        print("No detection image")
+    image = Image.open(path)
+    imgByteArray = io.BytesIO()
+    image.save(imgByteArray, "PNG")
+    client.publish(topic, imgByteArray.getvalue())
+    print("Image Sent\n")
+
+
+def send_alert(client, alertText):
+    topic = "dt/fighter_alerts"
+    jtext = text_to_json(alertText)
+    client.publish(topic, json.dumps(jtext))
+    print("ALERT Sent")
 
 
 def detect(save_img=False):
@@ -120,6 +153,7 @@ def detect(save_img=False):
             pred = apply_classifier(pred, modelc, img, im0s)
 
         # Process detections
+        isAlert = False
         for i, det in enumerate(pred):  # detections per image
             if webcam:  # batch_size >= 1
                 p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
@@ -129,7 +163,7 @@ def detect(save_img=False):
             p = Path(p)  # to Path
             save_path = str(save_dir / p.name)  # img.jpg
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
-            s += '%gx%g ' % img.shape[2:]  # print string
+            # s += '%gx%g ' % img.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             if len(det):
                 # Rescale boxes from img_size to im0 size
@@ -139,8 +173,10 @@ def detect(save_img=False):
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
-
+                    t = s
+                    s += "\n"
                 # Write results
+
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
@@ -153,8 +189,14 @@ def detect(save_img=False):
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
 
             # Print time (inference + NMS)
-            print(f'{s}Done. ({t2 - t1:.3f}s)')
+                isAlert = True
+                s += "\n"
+                print(f'{s}ALERT' + "\n")
+                text = t[0:-2]
+                send_alert(client, text)
 
+            else:
+                print("No Detections")
             # Stream results
             if view_img:
                 cv2.imshow(str(p), im0)
@@ -164,6 +206,7 @@ def detect(save_img=False):
             if save_img:
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)
+                    send_picture_alert(save_path, isAlert)
                 else:  # 'video'
                     if vid_path != save_path:  # new video
                         vid_path = save_path
@@ -181,7 +224,8 @@ def detect(save_img=False):
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         print(f"Results saved to {save_dir}{s}")
 
-    print(f'Done. ({time.time() - t0:.3f}s)')
+    print(f'ALERT. ({time.time() - t0:.3f}s)')
+    print()
 
 
 if __name__ == '__main__':
@@ -206,11 +250,11 @@ if __name__ == '__main__':
     print(opt)
     check_requirements()
 
-    print("\n\n\n")
     client = make_mqtt_connection()
+    time.sleep(5)
+    client.will_set(f"dt/fighter/{client_id}/lwt", "Offline", 1, True)
     client.loop_start()
-    hello_world(client)
-    #publish.single(f"dt/fighter/hi/lwt", "payload test", broker)
+
 
     with torch.no_grad():
         if opt.update:  # update all models (to fix SourceChangeWarning)
@@ -219,3 +263,4 @@ if __name__ == '__main__':
                 strip_optimizer(opt.weights)
         else:
             detect()
+
