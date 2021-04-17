@@ -41,7 +41,7 @@ def make_mqtt_connection():
 
 def text_to_json(alert):
     json_text = {
-        "client id": client_id,
+        "client_id": client_id,
         "alert": alert,
     }
     return json_text
@@ -85,7 +85,7 @@ def send_alert(client, alertText):
     topic = "dt/fighter_alerts"
     jtext = text_to_json(alertText)
     client.publish(topic, json.dumps(jtext))
-    print("ALERT Sent")
+    print("ALERT Sent\n")
 
 
 def detect(save_img=False):
@@ -191,9 +191,7 @@ def detect(save_img=False):
             # Print time (inference + NMS)
                 isAlert = True
                 s += "\n"
-                print(f'{s}ALERT' + "\n")
-                text = t[0:-2]
-                send_alert(client, text)
+                #print(f'{s}ALERT' + "\n")
 
             else:
                 print("No Detections")
@@ -207,6 +205,9 @@ def detect(save_img=False):
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)
                     send_picture_alert(save_path, isAlert)
+                    if isAlert:
+                        text = t[0:-2]
+                        send_alert(client, text)
                 else:  # 'video'
                     if vid_path != save_path:  # new video
                         vid_path = save_path
