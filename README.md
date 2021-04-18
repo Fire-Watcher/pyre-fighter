@@ -1,1 +1,1 @@
-# pyre-fighter
+# pyre-lookout
